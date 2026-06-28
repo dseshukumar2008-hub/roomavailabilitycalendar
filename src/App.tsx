@@ -1,4 +1,4 @@
-import { GoogleLogin, GoogleOAuthProvider, type CredentialResponse } from "@react-oauth/google";
+
 import {
   ArcElement,
   BarElement,
@@ -56,7 +56,7 @@ ChartJS.register(
   Tooltip,
 );
 
-const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "demo-google-client-id.apps.googleusercontent.com";
+
 
 const fieldClass =
   "w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--text)] outline-none ring-0 placeholder:text-[var(--muted)]/70 focus:border-[var(--gold)] focus:shadow-[0_0_0_4px_rgba(184,137,69,0.14)]";
@@ -99,27 +99,7 @@ type RazorpayOptions = {
   theme: { color: string };
 };
 
-type GoogleCredentialPayload = {
-  email?: string;
-  name?: string;
-  given_name?: string;
-};
 
-const decodeGoogleCredential = (credential: string): GoogleCredentialPayload | null => {
-  try {
-    const payload = credential.split(".")[1];
-    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const json = decodeURIComponent(
-      atob(normalizedPayload)
-        .split("")
-        .map((char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
-        .join(""),
-    );
-    return JSON.parse(json) as GoogleCredentialPayload;
-  } catch {
-    return null;
-  }
-};
 
 function Icon({ name, className = "" }: { name: IconName; className?: string }) {
   return (
@@ -1322,7 +1302,7 @@ function PriceRow({ label, value, strong = false }: { label: string; value: stri
 function AuthPage({ defaultRole }: { defaultRole: "customer" | "admin" }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, register, loginWithGoogle, theme } = useHotel();
+  const { login, register, theme } = useHotel();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"customer" | "admin">(defaultRole);
   const [name, setName] = useState("");
@@ -1388,19 +1368,7 @@ function AuthPage({ defaultRole }: { defaultRole: "customer" | "admin" }) {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
-    const googleProfile = credentialResponse.credential ? decodeGoogleCredential(credentialResponse.credential) : null;
-    try {
-      if (credentialResponse.credential) {
-        await apiClient.post("/auth/google", { credential: credentialResponse.credential });
-      }
-      await loginWithGoogle(googleProfile?.email, googleProfile?.name || googleProfile?.given_name, credentialResponse.credential);
-      navigate(customerRedirect);
-    } catch (err: any) {
-      const serverMessage = err.response?.data?.message;
-      setError(serverMessage || "Google sign-in failed. Please register first.");
-    }
-  };
+
 
 
   return (
@@ -1487,23 +1455,7 @@ function AuthPage({ defaultRole }: { defaultRole: "customer" | "admin" }) {
             </motion.button>
           </form>
 
-          <div className="my-6 flex items-center gap-4 text-xs font-bold uppercase tracking-[0.25em] text-[var(--muted)]">
-            <span className="h-px flex-1 bg-[var(--border)]" /> Google OAuth <span className="h-px flex-1 bg-[var(--border)]" />
-          </div>
 
-          <div className="overflow-hidden rounded-full border border-[var(--border)] bg-[var(--surface)] p-1">
-            <GoogleLogin
-              onSuccess={handleGoogleSuccess}
-              onError={() => setError("Google sign-in could not start. Configure VITE_GOOGLE_CLIENT_ID or use demo Google login.")}
-              shape="pill"
-              theme={theme === "dark" ? "filled_black" : "outline"}
-              text="continue_with"
-              width="420"
-            />
-          </div>
-          <button type="button" onClick={() => { void loginWithGoogle().then(() => navigate(customerRedirect)); }} className="mt-3 w-full rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-6 py-4 text-sm font-black text-[var(--text)]">
-            Continue with Google demo
-          </button>
         </div>
       </div>
     </Page>
@@ -2212,10 +2164,8 @@ function Footer() {
 
 export default function App() {
   return (
-    <GoogleOAuthProvider clientId={googleClientId}>
-      <HotelProvider>
-        <AppRouter />
-      </HotelProvider>
-    </GoogleOAuthProvider>
+    <HotelProvider>
+      <AppRouter />
+    </HotelProvider>
   );
 }
