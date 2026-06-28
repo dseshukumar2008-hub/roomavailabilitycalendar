@@ -204,7 +204,7 @@ export default function ArenaInspiredHomePage() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ delay: index * 0.08, duration: 0.55 }}
-              className="group relative h-72 overflow-hidden rounded-[2rem] shadow-[var(--arena-shadow)] lg:first:h-96"
+              className="group relative h-72 overflow-hidden rounded-[2rem] shadow-[var(--arena-shadow)]"
             >
               <img src={image.src} alt={image.label} className="h-full w-full object-cover transition duration-700 group-hover:scale-110" />
               <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />

@@ -1666,7 +1666,7 @@ function GalleryPage() {
       <SectionHeading eyebrow="Gallery" title="Every space is designed to feel cinematic." copy="Exterior, lobby, reception, swimming pool, restaurant, gym, spa, and sky lounge imagery with smooth hover zoom." />
       <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
         {galleryImages.map((image, index) => (
-          <motion.figure key={image.label} initial={{ opacity: 0, y: 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: index * 0.04 }} className={cn("group overflow-hidden rounded-[2rem]", index === 0 && "md:col-span-2")}>
+          <motion.figure key={image.label} initial={{ opacity: 0, y: 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ delay: index * 0.04 }} className="group overflow-hidden rounded-[2rem]">
             <img src={image.src} alt={image.label} className="h-full min-h-72 w-full object-cover transition duration-700 group-hover:scale-110" />
             <figcaption className="-mt-16 p-5 text-lg font-black text-white drop-shadow">{image.label}</figcaption>
           </motion.figure>
