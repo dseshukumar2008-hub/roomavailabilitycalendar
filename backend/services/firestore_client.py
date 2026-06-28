@@ -38,6 +38,10 @@ def array_union(values):
     return firestore.ArrayUnion(values)
 
 
+def array_remove(values):
+    return firestore.ArrayRemove(values)
+
+
 def public_config_status():
     return {
         "projectConfigured": bool(current_app.config.get("FIREBASE_PROJECT_ID")),

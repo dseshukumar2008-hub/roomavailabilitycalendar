@@ -4,20 +4,25 @@ import { Link } from "react-router-dom";
 import { useHotel } from "../context/HotelContext";
 import { galleryImages, heroImage, rooms as luxuryRooms } from "../data/hotelData";
 import {
-  bookingRecords,
   formatShortDate,
-  getBlockForRoomDate,
-  getBookingForRoomDate,
-  getCalendarStatus,
-  hasRoomConflict,
   isoDateAfter,
-  maintenanceBlocks,
-  pmsRooms,
   pmsRoomTypes,
   type CalendarStatus,
   type PMSRoom,
   type PMSRoomType,
+  type BookingRecord,
+  type MaintenanceBlock,
 } from "../data/operationsData";
+import {
+  hasRoomConflict,
+  getCalendarStatus,
+  getBlockForRoomDate,
+  getBookingForRoomDate,
+} from "../services/AvailabilityService";
+import { useRealtimeRooms } from "../hooks/useRealtimeRooms";
+import { useRealtimeBookings } from "../hooks/useRealtimeBookings";
+import { useRealtimeBlocks } from "../hooks/useRealtimeBlocks";
+import { useRealtimeHousekeeping } from "../hooks/useRealtimeHousekeeping";
 import { cn } from "../utils/cn";
 
 type SelectedCell = {
@@ -36,22 +41,25 @@ const statusStyles: Record<CalendarStatus, string> = {
   booked: "border-red-500/20 bg-red-500/12 text-red-700 dark:text-red-200",
   reserved: "border-blue-500/20 bg-blue-500/12 text-blue-700 dark:text-blue-200",
   maintenance: "border-amber-500/25 bg-amber-400/18 text-amber-700 dark:text-amber-200",
+  cleaning: "border-amber-500/25 bg-amber-400/18 text-amber-700 dark:text-amber-200",
   "out-of-service": "border-slate-500/20 bg-slate-500/12 text-slate-700 dark:text-slate-200",
 };
 
 const publicStatusLabels: Record<CalendarStatus, string> = {
   available: "Available",
-  booked: "Booked",
-  reserved: "Reserved",
+  booked: "Unavailable",
+  reserved: "Unavailable",
   maintenance: "Unavailable",
+  cleaning: "Unavailable",
   "out-of-service": "Closed",
 };
 
 export default function ArenaInspiredHomePage() {
   const { theme, toggleTheme, user } = useHotel();
-  const rooms = pmsRooms;
-  const bookings = bookingRecords;
-  const blocks = maintenanceBlocks;
+  const { rooms } = useRealtimeRooms();
+  const { bookings } = useRealtimeBookings();
+  const { blocks } = useRealtimeBlocks();
+  const { tasks } = useRealtimeHousekeeping();
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [signInOpen, setSignInOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -62,32 +70,64 @@ export default function ArenaInspiredHomePage() {
   const [statusFilter, setStatusFilter] = useState<CalendarStatus | "All">("All");
   const [search, setSearch] = useState("");
 
-  const dates = useMemo(() => Array.from({ length: 7 }, (_, index) => isoDateAfter(index)), []);
+  const dates = useMemo(() => {
+    return Array.from({ length: 7 }, (_, index) => {
+      const d = new Date(checkIn);
+      d.setDate(d.getDate() + index);
+      return d.toISOString().split("T")[0];
+    });
+  }, [checkIn]);
 
-  const filteredRooms = rooms.filter((room) => {
-    const status = getCalendarStatus(room, dates[0], bookings, blocks);
+  let filteredRooms = rooms.filter((room) => {
+    const status = getCalendarStatus(room, dates[0], bookings, blocks, tasks);
     const matchesSearch = [room.roomNumber, room.roomType, room.floor]
       .join(" ")
       .toLowerCase()
       .includes(search.toLowerCase());
-    return matchesSearch && room.roomType === roomType && (statusFilter === "All" || status === statusFilter);
+      
+    const matchesRoomType = room.roomType.trim().toLowerCase() === roomType.trim().toLowerCase();
+    const matchesStatus = statusFilter === "All" || status.trim().toLowerCase() === statusFilter.trim().toLowerCase();
+    
+    return matchesSearch && matchesRoomType && matchesStatus;
   });
 
+
+  // Filtered rooms are computed above — no fallback needed; trust the filter
+
+  // Do NOT fall back to all rooms — that hides the filter state from the user
+  // Instead, always trust the filter results (which include realtime Firestore data)
+
   const kpis = useMemo(() => {
+    const today = new Date().toISOString().split("T")[0];
     const total = rooms.length;
-    const booked = rooms.filter((room) => room.status === "booked").length;
-    const reserved = rooms.filter((room) => room.status === "reserved").length;
-    const blocked = blocks.filter((block) => block.status !== "Completed").length;
+    // Count rooms that have at least one active booking covering today
+    const bookedRoomNumbers = new Set(
+      bookings
+        .filter((b) => {
+          const s = (b.status || "").toLowerCase();
+          const checkIn = b.checkIn || "";
+          const checkOut = b.checkOut || "";
+          return s !== "cancelled" && today >= checkIn && today < checkOut;
+        })
+        .map((b) => b.assignedRoom)
+    );
+    const maintenanceRoomNumbers = new Set(
+      blocks.filter((bl) => bl.status !== "Completed" && today >= bl.startDate && today < bl.endDate)
+        .map((bl) => bl.roomNumber)
+    );
+    const booked = bookedRoomNumbers.size;
+    const maintenance = maintenanceRoomNumbers.size;
     const out = rooms.filter((room) => room.status === "out-of-service").length;
+    const available = Math.max(0, total - booked - maintenance - out);
     return [
       ["Total Rooms", total],
-      ["Available", Math.max(0, total - booked - reserved - blocked - out)],
+      ["Available", available],
       ["Booked", booked],
-      ["Reserved", reserved],
-      ["Unavailable", blocked],
+      ["Maintenance", maintenance],
+      ["Unavailable", booked + maintenance],
       ["Closed", out],
     ];
-  }, [rooms, blocks]);
+  }, [rooms, bookings, blocks]);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -252,7 +292,7 @@ export default function ArenaInspiredHomePage() {
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {dates.map((date) => {
-                      const status = getCalendarStatus(room, date, bookings, blocks);
+                      const status = getCalendarStatus(room, date, bookings, blocks, tasks);
                       return (
                         <button
                           key={`${room.id}-mobile-${date}`}
@@ -289,7 +329,7 @@ export default function ArenaInspiredHomePage() {
                       <p className="mt-1 text-xs font-black text-[var(--arena-accent-strong)]">{money(room.price)}</p>
                     </div>
                     {dates.map((date) => {
-                      const status = getCalendarStatus(room, date, bookings, blocks);
+                      const status = getCalendarStatus(room, date, bookings, blocks, tasks);
                       const block = getBlockForRoomDate(room.roomNumber, date, blocks);
                       const booking = getBookingForRoomDate(room.roomNumber, date, bookings);
                       const guestsBooked = booking?.guests ?? 0;
@@ -345,6 +385,7 @@ export default function ArenaInspiredHomePage() {
             cell={selectedCell}
             bookings={bookings}
             blocks={blocks}
+            user={user}
             onClose={() => setSelectedCell(null)}
           />
         ) : null}
@@ -398,11 +439,11 @@ function PublicInfoPanel({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function ArenaCellModal({ cell, bookings, blocks, onClose }: { cell: SelectedCell; bookings: typeof bookingRecords; blocks: typeof maintenanceBlocks; onClose: () => void }) {
+function ArenaCellModal({ cell, bookings, blocks, user, onClose }: { cell: SelectedCell; bookings: BookingRecord[]; blocks: MaintenanceBlock[]; user: any; onClose: () => void }) {
   const block = getBlockForRoomDate(cell.room.roomNumber, cell.date, blocks);
   const booking = getBookingForRoomDate(cell.room.roomNumber, cell.date, bookings);
   const publicRoom = luxuryRooms.find((room) => room.number === cell.room.roomNumber);
-  const roomLink = publicRoom ? `/room/${publicRoom.id}` : "/rooms";
+  const roomLink = publicRoom ? `/room/${publicRoom.id}?checkIn=${cell.date}` : "/rooms";
   const canBook = cell.status === "available";
 
   return (
@@ -436,9 +477,15 @@ function ArenaCellModal({ cell, bookings, blocks, onClose }: { cell: SelectedCel
           <Link to={roomLink} className="rounded-2xl bg-[var(--arena-accent)] px-4 py-3 text-center text-sm font-black text-white">
             View room details
           </Link>
-          <Link to={`/customer-login?redirect=${encodeURIComponent(roomLink)}&reason=booking`} className="rounded-2xl border border-[var(--arena-border)] bg-[var(--arena-surface-soft)] px-4 py-3 text-center text-sm font-black">
-            Sign in to book
-          </Link>
+          {user ? (
+            <Link to={roomLink} className="rounded-2xl border border-[var(--arena-border)] bg-[var(--arena-surface-soft)] px-4 py-3 text-center text-sm font-black">
+              Book now
+            </Link>
+          ) : (
+            <Link to={`/customer-login?redirect=${encodeURIComponent(roomLink)}&reason=booking`} className="rounded-2xl border border-[var(--arena-border)] bg-[var(--arena-surface-soft)] px-4 py-3 text-center text-sm font-black">
+              Sign in to book
+            </Link>
+          )}
         </div>
       </motion.div>
     </motion.div>

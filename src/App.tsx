@@ -25,10 +25,16 @@ import {
   useParams,
 } from "react-router-dom";
 import { HotelProvider, useHotel } from "./context/HotelContext";
+import { useRealtimeBookings } from "./hooks/useRealtimeBookings";
+import { useRealtimeBlocks } from "./hooks/useRealtimeBlocks";
+import { useRealtimeRooms } from "./hooks/useRealtimeRooms";
+import { useRealtimeHousekeeping } from "./hooks/useRealtimeHousekeeping";
+import { hasRoomConflict, getCalendarStatus } from "./services/AvailabilityService";
+import { db } from "./services/firebase";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import {
   categoryProfiles,
   categoryToSlug,
-  dateStatus,
   findRoom,
   galleryImages,
   heroImage,
@@ -673,7 +679,23 @@ function LegendDot({ status, label }: { status: RoomStatus; label: string }) {
 
 function RoomCard({ room }: { room: Room }) {
   const { toggleWishlist, isWishlisted } = useHotel();
-  const status = dateStatus(room, isoAfter(2));
+  // Use AvailabilityService (same engine as Home Calendar & Admin Calendar)
+  const { rooms: pmsRooms } = useRealtimeRooms();
+  const { bookings } = useRealtimeBookings();
+  const { blocks } = useRealtimeBlocks();
+  const { tasks } = useRealtimeHousekeeping();
+
+  const pmsRoom = pmsRooms.find((r) => r.roomNumber === room.number);
+  const today = isoAfter(0);
+  // Derive a RoomStatus-compatible badge from CalendarStatus
+  const calStatus = pmsRoom
+    ? getCalendarStatus(pmsRoom, today, bookings, blocks, tasks)
+    : "available";
+  const status: RoomStatus =
+    calStatus === "available" ? "available"
+    : calStatus === "booked" || calStatus === "reserved" || calStatus === "cleaning" ? "booked"
+    : "blocked";
+
   const statusText: Record<RoomStatus, string> = {
     available: "Available",
     booked: "Booked",
@@ -944,11 +966,32 @@ function DetailPill({ label, value }: { label: string; value: string }) {
 }
 
 function AvailabilityCalendar({ room }: { room: Room }) {
+  // Uses the SAME AvailabilityService as Home Calendar and Admin Calendar.
+  // All three always display identical availability for the same room & date.
+  const { rooms: pmsRooms } = useRealtimeRooms();
+  const { bookings } = useRealtimeBookings();
+  const { blocks } = useRealtimeBlocks();
+  const { tasks } = useRealtimeHousekeeping();
+
+  const pmsRoom = pmsRooms.find((r) => r.roomNumber === room.number);
   const dates = useMemo(() => Array.from({ length: 35 }, (_, index) => isoAfter(index)), [room.id]);
+
+  // Map CalendarStatus to the 3-value RoomStatus used by this calendar's UI
+  const toRoomStatus = (cs: ReturnType<typeof getCalendarStatus>): RoomStatus => {
+    if (cs === "available") return "available";
+    if (cs === "maintenance" || cs === "out-of-service" || cs === "cleaning") return "blocked";
+    return "booked"; // "booked" | "reserved"
+  };
+
   const statusClass: Record<RoomStatus, string> = {
     available: "border-emerald-500/20 bg-emerald-500/12 text-emerald-700",
     booked: "border-amber-500/20 bg-amber-500/14 text-amber-700",
     blocked: "border-rose-500/20 bg-rose-500/12 text-rose-700",
+  };
+  const statusLabel: Record<RoomStatus, string> = {
+    available: "Available",
+    booked: "Booked",
+    blocked: "Blocked",
   };
 
   return (
@@ -966,12 +1009,15 @@ function AvailabilityCalendar({ room }: { room: Room }) {
       </div>
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5 lg:grid-cols-7">
         {dates.map((date) => {
-          const status = dateStatus(room, date);
+          const calStatus = pmsRoom
+            ? getCalendarStatus(pmsRoom, date, bookings, blocks, tasks)
+            : "available";
+          const status = toRoomStatus(calStatus);
           return (
             <div key={date} className={cn("rounded-2xl border p-3 text-center", statusClass[status])}>
               <p className="text-xs font-bold uppercase tracking-[0.18em]">{new Date(date).toLocaleDateString("en-IN", { weekday: "short" })}</p>
               <p className="mt-1 text-lg font-black">{new Date(date).getDate()}</p>
-              <p className="mt-1 text-[11px] font-black capitalize">{status}</p>
+              <p className="mt-1 text-[11px] font-black capitalize">{statusLabel[status]}</p>
             </div>
           );
         })}
@@ -984,6 +1030,9 @@ function BookingPanel({ room }: { room: Room }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useHotel();
+  const { bookings } = useRealtimeBookings();
+  const { blocks } = useRealtimeBlocks();
+  const { rooms: pmsRoomsList } = useRealtimeRooms();
   const pendingBooking = useMemo(() => {
     try {
       const value = sessionStorage.getItem("nirvana-pending-booking");
@@ -993,8 +1042,20 @@ function BookingPanel({ room }: { room: Room }) {
       return null;
     }
   }, [room.id]);
-  const [checkIn, setCheckIn] = useState(pendingBooking?.checkIn ?? isoAfter(1));
-  const [checkOut, setCheckOut] = useState(pendingBooking?.checkOut ?? isoAfter(3));
+  const queryCheckIn = new URLSearchParams(location.search).get("checkIn");
+  const [checkIn, setCheckIn] = useState(queryCheckIn ?? pendingBooking?.checkIn ?? isoAfter(1));
+  
+  // Update checkOut to be 2 days after checkIn by default if queryCheckIn is provided
+  const defaultCheckOut = useMemo(() => {
+    if (queryCheckIn) {
+      const d = new Date(queryCheckIn);
+      d.setDate(d.getDate() + 2);
+      return d.toISOString().split("T")[0];
+    }
+    return isoAfter(3);
+  }, [queryCheckIn]);
+  
+  const [checkOut, setCheckOut] = useState(pendingBooking?.checkOut ?? defaultCheckOut);
   const [guests, setGuests] = useState(pendingBooking?.guests ?? 1);
   const [roomType, setRoomType] = useState<RoomCategory>(pendingBooking?.roomType ?? room.category);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(pendingBooking?.paymentMethod ?? "Razorpay");
@@ -1066,6 +1127,12 @@ function BookingPanel({ room }: { room: Room }) {
       setBookingError(`Maximum occupancy reached. This room can accommodate only ${maxOccupancy} guests. Please choose another room or reduce the number of guests.`);
       return;
     }
+
+    if (hasRoomConflict(room.number, checkIn, checkOut, bookings, blocks, pmsRoomsList)) {
+      setBookingError("These dates are no longer available. Please choose different dates.");
+      return;
+    }
+
     let createdBooking: { id?: string; subtotal?: number; taxes?: number; service_charge?: number; total_amount?: number } | null = null;
     try {
 
@@ -1094,7 +1161,44 @@ function BookingPanel({ room }: { room: Room }) {
         service_charge: serviceCharge,
         total_amount: total,
       };
-      console.warn("Booking API unavailable. Confirming booking in preview mode.");
+      console.warn("Booking API unavailable. Writing booking directly to Firestore.");
+      // ─── FALLBACK: write booking directly to Firestore so realtime listeners fire ───
+      try {
+        // Each night in the stay range
+        const stayDates: string[] = [];
+        const start = new Date(checkIn);
+        const end = new Date(checkOut);
+        for (const d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+          stayDates.push(d.toISOString().split("T")[0]);
+        }
+        const fallbackRef = await addDoc(collection(db, "bookings"), {
+          user_id: user?.id || user?.email || "guest",
+          room_id: room.number,
+          room_number: room.number,
+          room_type: room.category,
+          guest_name: user?.name || "",
+          phone: user?.phone || "",
+          email: user?.email || "",
+          check_in: checkIn,
+          check_out: checkOut,
+          stay_dates: stayDates,
+          guests,
+          guest_details: guestDetails.slice(0, guests),
+          max_occupancy: maxOccupancy,
+          status: "Confirmed",
+          payment_status: "paid",
+          payment_method: paymentMethod,
+          subtotal,
+          taxes,
+          service_charge: serviceCharge,
+          total_amount: total,
+          created_at: serverTimestamp(),
+          updated_at: serverTimestamp(),
+        });
+        createdBooking.id = fallbackRef.id;
+      } catch (fsErr) {
+        console.error("Firestore fallback write failed:", fsErr);
+      }
     }
     const invoiceId = `SNP-${Date.now()}`;
     const confirmedBookingId = createdBooking?.id ?? `LOCAL-${Date.now()}`;
@@ -1302,7 +1406,7 @@ function PriceRow({ label, value, strong = false }: { label: string; value: stri
 function AuthPage({ defaultRole }: { defaultRole: "customer" | "admin" }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, register, theme } = useHotel();
+  const { login, register } = useHotel();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"customer" | "admin">(defaultRole);
   const [name, setName] = useState("");

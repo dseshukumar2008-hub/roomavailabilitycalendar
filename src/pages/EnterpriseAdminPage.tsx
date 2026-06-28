@@ -13,11 +13,7 @@ import {
   feedbackRecords,
   findOperationsRecord,
   formatShortDate,
-  getBlockForRoomDate,
-  getBookingForRoomDate,
-  getCalendarStatus,
   guestRecords,
-  hasRoomConflict,
   isoDateAfter,
   lightStatusColorClasses,
   notificationCenterItems,
@@ -47,6 +43,16 @@ import {
   type ServiceRequest,
   type TaskStatus,
 } from "../data/operationsData";
+import { useRealtimeRooms } from "../hooks/useRealtimeRooms";
+import { useRealtimeBookings } from "../hooks/useRealtimeBookings";
+import { useRealtimeBlocks } from "../hooks/useRealtimeBlocks";
+import { useRealtimeHousekeeping } from "../hooks/useRealtimeHousekeeping";
+import {
+  hasRoomConflict,
+  getCalendarStatus,
+  getBlockForRoomDate,
+  getBookingForRoomDate,
+} from "../services/AvailabilityService";
 import { cn } from "../utils/cn";
 
 type AdminModule =
@@ -167,72 +173,10 @@ const chartOptions = {
   },
 };
 
-type PreviewCustomerBooking = {
-  id: string;
-  roomId: string;
-  roomNumber?: string;
-  roomTitle: string;
-  roomType: PMSRoomType;
-  customerEmail: string;
-  customerPhone?: string;
-  checkIn: string;
-  checkOut: string;
-  guests: number;
-  total: number;
-  status: "Confirmed" | "Completed" | "Cancelled";
-  invoiceId: string;
-};
-
-const readPreviewBookings = (): BookingRecord[] => {
-  try {
-    const bookings = JSON.parse(localStorage.getItem("nirvana-all-customer-bookings") || "[]") as PreviewCustomerBooking[];
-    return bookings.map((booking) => {
-      const roomNumber = booking.roomNumber || booking.roomId.split("-").at(-1) || booking.roomId;
-      const room = pmsRooms.find((item) => item.roomNumber === roomNumber);
-      return {
-        id: booking.id,
-        guestName: booking.customerEmail.split("@")[0].replace(/[._-]+/g, " "),
-        phone: booking.customerPhone || "Not provided",
-        email: booking.customerEmail,
-        idProof: "Stored in customer profile",
-        checkIn: booking.checkIn,
-        checkOut: booking.checkOut,
-        guests: booking.guests,
-        maxOccupancy: room?.capacity ?? booking.guests,
-        roomType: booking.roomType,
-        assignedRoom: roomNumber,
-        status: booking.status === "Completed" ? "Checked-Out" : booking.status,
-        amount: booking.total,
-      } satisfies BookingRecord;
-    });
-  } catch {
-    return [];
-  }
-};
-
-const mergeBookings = (apiBookings: BookingRecord[], previewBookings: BookingRecord[]) => {
-  const seen = new Set<string>();
-  return [...previewBookings, ...apiBookings].filter((booking) => {
-    if (seen.has(booking.id)) return false;
-    seen.add(booking.id);
-    return true;
-  });
-};
-
 type ApiRecord = Record<string, unknown>;
 
 const asString = (value: unknown, fallback = "") => (value == null || value === "" ? fallback : String(value));
 const asNumber = (value: unknown, fallback = 0) => Number(value ?? fallback) || fallback;
-
-const mapApiRoom = (row: ApiRecord): PMSRoom => ({
-  id: asString(row.id, asString(row.roomNumber)),
-  roomNumber: asString(row.roomNumber || row.room_number || row.id),
-  roomType: asString(row.roomType || row.room_type || row.category, "Deluxe") as PMSRoomType,
-  floor: asString(row.floor, "Floor 1"),
-  capacity: asNumber(row.capacity, 2),
-  price: asNumber(row.price, 0),
-  status: asString(row.status, "available") as PMSRoomStatus,
-});
 
 const mapApiBooking = (row: ApiRecord): BookingRecord => ({
   id: asString(row.id),
@@ -419,7 +363,7 @@ export default function EnterpriseAdminPage() {
   const [loading, setLoading] = useState(true);
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [roomsState, setRoomsState] = useState<PMSRoom[]>(pmsRooms);
-  const [bookingsState, setBookingsState] = useState<BookingRecord[]>(() => readPreviewBookings());
+  const [bookingsState, setBookingsState] = useState<BookingRecord[]>([]);
   const [blocksState, setBlocksState] = useState<MaintenanceBlock[]>([]);
   const [housekeepingState, setHousekeepingState] = useState<HousekeepingTask[]>([]);
   const [serviceState, setServiceState] = useState<ServiceRequest[]>([]);
@@ -430,6 +374,16 @@ export default function EnterpriseAdminPage() {
   const [notificationRows, setNotificationRows] = useState<AdminNotification[]>([]);
   const [notificationLogs, setNotificationLogs] = useState<NotificationLog[]>([]);
   const [invoiceRows, setInvoiceRows] = useState<AdminInvoice[]>([]);
+
+  const { rooms: rtRooms } = useRealtimeRooms();
+  const { bookings: rtBookings } = useRealtimeBookings();
+  const { blocks: rtBlocks } = useRealtimeBlocks();
+  const { tasks: rtTasks } = useRealtimeHousekeeping();
+
+  useEffect(() => { if (rtRooms.length) setRoomsState(rtRooms); }, [rtRooms]);
+  useEffect(() => { if (rtBookings.length) setBookingsState(rtBookings); }, [rtBookings]);
+  useEffect(() => { if (rtBlocks.length) setBlocksState(rtBlocks); }, [rtBlocks]);
+  useEffect(() => { if (rtTasks.length) setHousekeepingState(rtTasks); }, [rtTasks]);
 
   const kpis = useMemo(() => buildKpis(roomsState, bookingsState, blocksState), [roomsState, bookingsState, blocksState]);
 
@@ -443,8 +397,7 @@ export default function EnterpriseAdminPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const [roomsRes, bookingsRes, corporateRes, housekeepingRes, serviceRes, complaintsRes, feedbackRes, gstRes, blocksRes, notificationsRes, logsRes, invoicesRes] = await Promise.all([
-          apiClient.get("/rooms"),
+        const [bookingsRes, corporateRes, housekeepingRes, serviceRes, complaintsRes, feedbackRes, gstRes, blocksRes, notificationsRes, logsRes, invoicesRes] = await Promise.all([
           apiClient.get("/bookings"),
           apiClient.get("/corporate_bookings"),
           apiClient.get("/housekeeping_tasks"),
@@ -458,32 +411,24 @@ export default function EnterpriseAdminPage() {
           apiClient.get("/invoices"),
         ]);
         if (!mounted) return;
-        const apiRooms = (roomsRes.data.rooms ?? []).map(mapApiRoom);
         const apiBookings = (bookingsRes.data.bookings ?? []).map(mapApiBooking);
-        const previewBookings = readPreviewBookings();
-        setRoomsState(apiRooms.length ? apiRooms : pmsRooms);
-        setBookingsState(mergeBookings(apiBookings, previewBookings));
+        // Rely on realtime hooks for bookings, blocks, housekeeping, and rooms
+        // to prevent race conditions with API fallbacks.
         setCorporateState((corporateRes.data.corporate_bookings ?? []).map(mapApiCorporate));
-        setHousekeepingState((housekeepingRes.data.housekeeping_tasks ?? []).map(mapApiHousekeeping));
         setServiceState((serviceRes.data.room_service_orders ?? []).map(mapApiService));
         setComplaintsState((complaintsRes.data.complaints ?? []).map(mapApiComplaint));
         setFeedbackState((feedbackRes.data.feedback ?? []).map(mapApiFeedback));
         setPaymentsState((gstRes.data.gst_entries ?? []).map(mapApiPayment));
-        setBlocksState((blocksRes.data.maintenance_blocks ?? []).map(mapApiBlock));
         setNotificationRows((notificationsRes.data.notifications ?? []).map(mapApiNotification));
         setNotificationLogs((logsRes.data.notification_logs ?? []).map(mapApiNotificationLog));
         setInvoiceRows((invoicesRes.data.invoices ?? []).map(mapApiInvoice));
       } catch {
         if (!mounted) return;
-        setRoomsState(pmsRooms);
-        setBookingsState(readPreviewBookings());
         setCorporateState([]);
-        setHousekeepingState([]);
         setServiceState([]);
         setComplaintsState([]);
         setFeedbackState([]);
         setPaymentsState([]);
-        setBlocksState([]);
         setNotificationRows([]);
         setNotificationLogs([]);
         setInvoiceRows([]);
@@ -509,6 +454,7 @@ export default function EnterpriseAdminPage() {
         rooms={roomsState}
         bookings={bookingsState}
         blocks={blocksState}
+        tasks={housekeepingState}
         onSelectCell={setSelectedCell}
       />
     ),
@@ -629,9 +575,6 @@ export default function EnterpriseAdminPage() {
             rooms={roomsState}
             bookings={bookingsState}
             blocks={blocksState}
-            setRooms={setRoomsState}
-            setBookings={setBookingsState}
-            setBlocks={setBlocksState}
             notify={notify}
           />
         ) : null}
@@ -723,7 +666,7 @@ function OverviewModule({ kpis, bookings, rooms, blocks }: { kpis: Array<{ label
   );
 }
 
-function CalendarModule({ rooms, bookings, blocks, onSelectCell }: { rooms: PMSRoom[]; bookings: BookingRecord[]; blocks: MaintenanceBlock[]; onSelectCell: (cell: SelectedCell) => void }) {
+function CalendarModule({ rooms, bookings, blocks, tasks, onSelectCell }: { rooms: PMSRoom[]; bookings: BookingRecord[]; blocks: MaintenanceBlock[]; tasks: HousekeepingTask[]; onSelectCell: (cell: SelectedCell) => void }) {
   const [view, setView] = useState<"7" | "week" | "month">("7");
   const [startOffset, setStartOffset] = useState(0);
   const dayCount = view === "month" ? 30 : view === "week" ? 14 : 7;
@@ -760,7 +703,7 @@ function CalendarModule({ rooms, bookings, blocks, onSelectCell }: { rooms: PMSR
                 <p className="mt-1 text-xs font-black text-[#d2aa6a]">{currency(room.price)}</p>
               </Link>
               {dates.map((date) => {
-                const status = getCalendarStatus(room, date, bookings, blocks);
+                const status = getCalendarStatus(room, date, bookings, blocks, tasks);
                 const block = getBlockForRoomDate(room.roomNumber, date, blocks);
                 const booking = getBookingForRoomDate(room.roomNumber, date, bookings);
                 const guestsBooked = booking?.guests ?? 0;
@@ -799,63 +742,86 @@ function CalendarModule({ rooms, bookings, blocks, onSelectCell }: { rooms: PMSR
   );
 }
 
-function CalendarActionModal({ cell, onClose, rooms, bookings, blocks, setRooms, setBookings, setBlocks, notify }: { cell: SelectedCell; onClose: () => void; rooms: PMSRoom[]; bookings: BookingRecord[]; blocks: MaintenanceBlock[]; setRooms: React.Dispatch<React.SetStateAction<PMSRoom[]>>; setBookings: React.Dispatch<React.SetStateAction<BookingRecord[]>>; setBlocks: React.Dispatch<React.SetStateAction<MaintenanceBlock[]>>; notify: (message: string) => void }) {
+function CalendarActionModal({ cell, onClose, rooms, bookings, blocks, notify }: { cell: SelectedCell; onClose: () => void; rooms: PMSRoom[]; bookings: BookingRecord[]; blocks: MaintenanceBlock[]; notify: (message: string) => void }) {
   const [reason, setReason] = useState("Maintenance");
   const [staff, setStaff] = useState("Engineering Team");
 
-  const setRoomStatus = (status: PMSRoomStatus) => {
-    setRooms((current) => current.map((room) => room.roomNumber === cell.room.roomNumber ? { ...room, status } : room));
+  const setRoomStatus = async (status: PMSRoomStatus) => {
+    try {
+      await apiClient.put(`/rooms/${cell.room.id}`, { status });
+    } catch (e) {
+      console.error(e);
+      notify("Failed to update room status.");
+    }
   };
 
-  const createBooking = (status: BookingStatus) => {
-    if (hasRoomConflict(cell.room.roomNumber, cell.date, cell.date, bookings, blocks, rooms)) {
+  const createBooking = async (status: BookingStatus) => {
+    // Compute checkout as cell.date + 1 day
+    const checkOutDate = new Date(cell.date);
+    checkOutDate.setDate(checkOutDate.getDate() + 1);
+    const checkOut = checkOutDate.toISOString().slice(0, 10);
+    if (hasRoomConflict(cell.room.roomNumber, cell.date, checkOut, bookings, blocks, rooms)) {
       notify("This room is unavailable for the selected dates.");
       return;
     }
-    const nextBooking: BookingRecord = {
-      id: `BKG-${Date.now().toString().slice(-5)}`,
-      guestName: status === "Pending" ? "Reserved Guest" : "Walk-in Guest",
-      phone: "9876500000",
-      email: "frontoffice@nirvanaplaza.com",
-      idProof: "Pending verification",
+    const payload = {
+      roomId: cell.room.roomNumber,
       checkIn: cell.date,
-      checkOut: isoDateAfter(1),
+      checkOut,
       guests: 1,
-      roomType: cell.room.roomType,
-      assignedRoom: cell.room.roomNumber,
+      guestDetails: [
+        {
+          name: status === "Pending" ? "Reserved Guest" : "Walk-in Guest",
+          age: "30",
+          gender: "Other",
+          idProofType: "None",
+          idNumber: "Pending verification"
+        }
+      ],
       status,
-      amount: cell.room.price,
+      price: cell.room.price,
     };
-    setBookings((current) => [nextBooking, ...current]);
-    setRoomStatus(status === "Pending" ? "reserved" : "booked");
-    notify(status === "Pending" ? "Room reserved successfully." : "Booking created successfully.");
-    onClose();
+    try {
+      await apiClient.post("/bookings", payload);
+      notify(status === "Pending" ? "Room reserved successfully." : "Booking created successfully.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      notify("Failed to create booking.");
+    }
   };
 
-  const blockRoom = () => {
-    const block: MaintenanceBlock = {
-      id: `MNT-${Date.now().toString().slice(-5)}`,
-      roomNumber: cell.room.roomNumber,
-      startDate: cell.date,
-      endDate: cell.date,
+  const blockRoom = async () => {
+    const payload = {
+      room_id: cell.room.id,
+      start_date: cell.date,
+      end_date: cell.date,
       reason,
-      description: `${reason} created from calendar cell action.`,
-      priority: "Medium",
-      assignedStaff: staff,
-      expectedCompletionDate: cell.date,
-      status: "Active",
+      created_by: staff,
+      status: "Active"
     };
-    setBlocks((current) => [block, ...current]);
-    setRoomStatus("maintenance");
-    notify("Room blocked for maintenance.");
-    onClose();
+    try {
+      await apiClient.post("/maintenance_blocks", payload);
+      notify("Room blocked for maintenance.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      notify("Failed to block room.");
+    }
   };
 
-  const markAvailable = () => {
-    setRoomStatus("available");
-    setBlocks((current) => current.map((block) => block.roomNumber === cell.room.roomNumber ? { ...block, status: "Completed" } : block));
-    notify("Room marked available. Completed blocks were released automatically.");
-    onClose();
+  const markAvailable = async () => {
+    try {
+      if (cell.block) {
+        await apiClient.put(`/maintenance_blocks/${cell.block.id}`, { status: "Completed" });
+      }
+      await apiClient.put(`/rooms/${cell.room.id}`, { status: "available" });
+      notify("Room marked available.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      notify("Failed to mark room available.");
+    }
   };
 
   return (
@@ -901,10 +867,14 @@ function RoomsModule({ rooms, setRooms, blocks, setBlocks, notify, search }: { r
   const [statusFilter, setStatusFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
   const [floorFilter, setFloorFilter] = useState("All");
-  const filteredRooms = rooms.filter((room) => {
+  let filteredRooms = rooms.filter((room) => {
     const matchesSearch = [room.roomNumber, room.roomType, room.floor].some((value) => normalize(value).includes(normalize(search)));
     return matchesSearch && (statusFilter === "All" || room.status === statusFilter) && (typeFilter === "All" || room.roomType === typeFilter) && (floorFilter === "All" || room.floor === floorFilter);
   });
+
+  if (filteredRooms.length === 0 && rooms.length > 0) {
+    filteredRooms = rooms;
+  }
 
   const addRoom = () => {
     if (rooms.some((room) => room.roomNumber === form.roomNumber)) {

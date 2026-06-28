@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request
 from services.date_utils import each_date_inclusive
 from services.default_data import ensure_seed_rooms
 from services.firestore_client import get_db
+from services.availability_engine import get_room_availability_range, get_room_status_for_date
 
 rooms_bp = Blueprint("rooms", __name__)
 
@@ -18,8 +19,6 @@ def room_to_dict(snapshot):
         "capacity": data.get("capacity"),
         "price": data.get("price", 0),
         "status": data.get("status", "available"),
-        "bookedDates": data.get("booked_dates", []),
-        "blockedDates": data.get("blocked_dates", []),
         "amenities": data.get("amenities", []),
         "images": data.get("images", []),
     }
@@ -54,20 +53,45 @@ def room_detail(room_id):
 
 @rooms_bp.get("/rooms/<room_id>/availability")
 def room_availability(room_id):
+    """
+    Returns dynamic availability for a room over a date range.
+    Uses the centralized availability_engine — the single source of truth.
+    Queries live Firestore bookings + maintenance_blocks, never static arrays.
+    """
     ensure_seed_rooms()
     room = get_db().collection("rooms").document(str(room_id)).get()
     if not room.exists:
         return jsonify({"message": "Room not found"}), 404
-    data = room.to_dict() or {}
-    dates = each_date_inclusive(request.args.get("start"), request.args.get("end")) if request.args.get("start") and request.args.get("end") else []
-    booked = set(data.get("booked_dates", []))
-    blocked = set(data.get("blocked_dates", []))
-    return jsonify(
-        {
-            "roomId": room.id,
-            "dates": [
-                {"date": date, "status": "blocked" if date in blocked else "booked" if date in booked else "available"}
-                for date in dates
-            ],
-        }
-    )
+
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    room_number = (room.to_dict() or {}).get("room_number", room_id)
+
+    if start and end:
+        dates = get_room_availability_range(room_number, start, end)
+    else:
+        # Default: return today's status only
+        from datetime import date as dt
+        today = dt.today().isoformat()
+        dates = [{"date": today, "status": get_room_status_for_date(room_number, today)}]
+
+    return jsonify({"roomId": room.id, "dates": dates})
+
+
+@rooms_bp.put("/rooms/<room_id>")
+def update_room(room_id):
+    db = get_db()
+    ref = db.collection("rooms").document(str(room_id))
+    if not ref.get().exists:
+        return jsonify({"message": "Room not found"}), 404
+    payload = request.get_json() or {}
+    allowed = {"status", "price", "capacity", "floor", "amenities", "notes"}
+    updates = {k: v for k, v in payload.items() if k in allowed}
+    if updates:
+        from services.firestore_client import server_timestamp
+        updates["updated_at"] = server_timestamp()
+        ref.update(updates)
+    data = ref.get().to_dict() or {}
+    data["id"] = ref.id
+    return jsonify({"room": data})

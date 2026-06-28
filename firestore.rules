@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Rooms — public read, backend-only write (via Admin SDK which bypasses rules)
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Bookings — anyone can read, authenticated users can create their own
+    // Backend writes via Admin SDK (bypasses rules), frontend fallback uses client SDK
+    match /bookings/{bookingId} {
+      allow read: if true;
+      // Allow authenticated frontend to create bookings (used as fallback when Flask is unreachable)
+      allow create: if request.auth != null;
+      // Allow the booking owner to read/update their own booking status
+      allow update: if request.auth != null && (
+        resource.data.user_id == request.auth.uid ||
+        resource.data.email == request.auth.token.email
+      );
+      allow delete: if false;
+    }
+
+    // Maintenance blocks — public read, backend-only write
+    match /maintenance_blocks/{blockId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Housekeeping tasks — public read, backend-only write
+    match /housekeeping_tasks/{taskId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Users — private, owner only
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Catch-all: deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

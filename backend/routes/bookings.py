@@ -7,6 +7,7 @@ from services.default_data import ensure_seed_rooms
 from services.firestore_client import array_union, get_db, server_timestamp
 from services.notification_service import admin_message, schedule_admin_notification, schedule_booking_payment_reminders
 from services.automation_service import AutomationService
+from services.availability_engine import has_conflict as engine_has_conflict
 
 bookings_bp = Blueprint("bookings", __name__)
 
@@ -80,11 +81,11 @@ def create_booking():
         if not room_snapshot.exists:
             raise ValueError("Room not found")
         room = room_snapshot.to_dict() or {}
-        booked_dates = set(room.get("booked_dates", []))
-        blocked_dates = set(room.get("blocked_dates", []))
-        conflicts = sorted(set(stay_dates) & (booked_dates | blocked_dates))
-        if conflicts:
-            raise BookingConflict(", ".join(conflicts))
+        room_number = room.get("room_number", room_id)
+
+        # Use the centralized availability engine — same logic as frontend AvailabilityService.ts
+        if engine_has_conflict(room_number, payload["checkIn"], payload["checkOut"]):
+            raise BookingConflict(f"{payload['checkIn']} to {payload['checkOut']}")
 
         max_occupancy = int(room.get("capacity") or room.get("max_occupancy") or 1)
         guest_count = len(submitted_guest_details) if submitted_guest_details else max(1, int(payload.get("guests", 1)))
@@ -111,7 +112,7 @@ def create_booking():
             "guests": guest_count,
             "guest_details": submitted_guest_details[:max_occupancy],
             "max_occupancy": max_occupancy,
-            "status": payload.get("status", "reserved"),
+            "status": payload.get("status", "Confirmed"),
             "payment_status": payload.get("paymentStatus", "pending"),
             "payment_url": payload.get("paymentUrl"),
             "payment_method": payload.get("paymentMethod"),
@@ -122,7 +123,7 @@ def create_booking():
             "created_at": server_timestamp(),
             "updated_at": server_timestamp(),
         }
-        tx.update(room_ref, {"booked_dates": array_union(stay_dates), "status": "reserved", "updated_at": server_timestamp()})
+        tx.update(room_ref, {"booked_dates": array_union(stay_dates), "status": "booked", "updated_at": server_timestamp()})
         tx.set(booking_ref, booking)
         booking["id"] = booking_ref.id
         return booking

@@ -80,11 +80,27 @@ def create_booking():
         if not room_snapshot.exists:
             raise ValueError("Room not found")
         room = room_snapshot.to_dict() or {}
-        booked_dates = set(room.get("booked_dates", []))
-        blocked_dates = set(room.get("blocked_dates", []))
-        conflicts = sorted(set(stay_dates) & (booked_dates | blocked_dates))
-        if conflicts:
-            raise BookingConflict(", ".join(conflicts))
+        room_number_str = str(room.get("room_number", room_id))
+
+        # Check active bookings for strict overlap: b.check_in < check_out and b.check_out > check_in
+        bookings_query = db.collection("bookings").where("room_id", "==", room_id).get(transaction=tx)
+        for b_snap in bookings_query:
+            b = b_snap.to_dict()
+            if b.get("status") == "Cancelled":
+                continue
+            if b.get("check_in") and b.get("check_out"):
+                if b["check_in"] < payload["checkOut"] and b["check_out"] > payload["checkIn"]:
+                    raise BookingConflict("These dates overlap with an existing booking.")
+
+        # Check maintenance blocks for strict overlap
+        blocks_query = db.collection("maintenance_blocks").where("roomNumber", "==", room_number_str).get(transaction=tx)
+        for block_snap in blocks_query:
+            block = block_snap.to_dict()
+            if block.get("status") == "Completed":
+                continue
+            if block.get("startDate") and block.get("endDate"):
+                if block["startDate"] < payload["checkOut"] and block["endDate"] > payload["checkIn"]:
+                    raise BookingConflict("These dates overlap with a maintenance block.")
 
         max_occupancy = int(room.get("capacity") or room.get("max_occupancy") or 1)
         guest_count = len(submitted_guest_details) if submitted_guest_details else max(1, int(payload.get("guests", 1)))
@@ -122,7 +138,7 @@ def create_booking():
             "created_at": server_timestamp(),
             "updated_at": server_timestamp(),
         }
-        tx.update(room_ref, {"booked_dates": array_union(stay_dates), "status": "reserved", "updated_at": server_timestamp()})
+        tx.update(room_ref, {"status": "reserved", "updated_at": server_timestamp()})
         tx.set(booking_ref, booking)
         booking["id"] = booking_ref.id
         return booking

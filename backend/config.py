@@ -6,7 +6,7 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-jwt")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
-    FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
+    FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "serviceAccountKey.json")
     FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
     FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID", "")
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")

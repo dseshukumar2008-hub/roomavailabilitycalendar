@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from services.firestore_client import get_db
+from services.firestore_client import get_db, server_timestamp, array_remove
 from services.notification_service import send_notification_reference
 
 scheduler = BackgroundScheduler(timezone="UTC")
@@ -69,6 +69,40 @@ def trigger_daily_report(app):
             print(f"[SCHEDULER] trigger_daily_report skipped (Firebase not ready): {e}")
 
 
+def release_expired_reservations(app):
+    with app.app_context():
+        try:
+            db = get_db()
+            now = datetime.now(timezone.utc)
+            query = db.collection("bookings").where("status", "==", "Pending").stream()
+            for doc in query:
+                data = doc.to_dict() or {}
+                created_at = data.get("created_at")
+                if not created_at:
+                    continue
+                if hasattr(created_at, "timestamp"):
+                    diff = now.timestamp() - created_at.timestamp()
+                    if diff > 10 * 60:
+                        db.collection("bookings").document(doc.id).update({
+                            "status": "Cancelled",
+                            "updated_at": server_timestamp()
+                        })
+                        room_id = data.get("room_id")
+                        if room_id:
+                            room_ref = db.collection("rooms").document(room_id)
+                            room_data = room_ref.get().to_dict() or {}
+                            if room_data.get("status") == "reserved":
+                                stay_dates = data.get("stay_dates", [])
+                                if stay_dates:
+                                    room_ref.update({
+                                        "status": "available",
+                                        "booked_dates": array_remove(stay_dates),
+                                        "updated_at": server_timestamp()
+                                    })
+        except Exception as e:
+            print(f"[SCHEDULER] release_expired_reservations skipped (Firebase not ready): {e}")
+
+
 def start_notification_scheduler(app):
     if not app.config.get("NOTIFICATION_SCHEDULER_ENABLED", True):
         return
@@ -93,6 +127,16 @@ def start_notification_scheduler(app):
         seconds=10,
         args=[app],
         id="process_automation_scheduled_tasks",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        release_expired_reservations,
+        "interval",
+        seconds=60,
+        args=[app],
+        id="release_expired_reservations",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

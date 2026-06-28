@@ -23,6 +23,7 @@ COLLECTION_FIELDS = {
     "loyalty_accounts": ["user_id", "points", "tier", "updated_at"],
     "shift_handover_logs": ["shift_date", "outgoing_staff", "incoming_staff", "notes"],
     "maintenance_blocks": ["room_id", "start_date", "end_date", "reason", "created_by", "status"],
+    "rooms": ["room_number", "room_type", "capacity", "price", "status", "floor"],
 }
 
 

@@ -1,7 +1,7 @@
 import { rooms } from "./hotelData";
 
 export type PMSRoomType = "Single" | "Double" | "Deluxe" | "Suite" | "Executive Suite";
-export type PMSRoomStatus = "available" | "booked" | "reserved" | "maintenance" | "out-of-service";
+export type PMSRoomStatus = "available" | "booked" | "reserved" | "maintenance" | "out-of-service" | "cleaning";
 export type Priority = "Low" | "Medium" | "High";
 export type MaintenanceStatus = "Active" | "In Progress" | "Completed";
 export type BookingStatus = "Pending" | "Confirmed" | "Checked-In" | "Checked-Out" | "Cancelled";
@@ -479,8 +479,9 @@ export const statusLabels: Record<PMSRoomStatus, string> = {
   available: "Available",
   booked: "Booked",
   reserved: "Reserved",
-  maintenance: "Maintenance / Blocked",
-  "out-of-service": "Out Of Service",
+  maintenance: "Maintenance",
+  "out-of-service": "Out of Service",
+  cleaning: "Cleaning",
 };
 
 export const statusColorClasses: Record<PMSRoomStatus, string> = {
@@ -488,6 +489,7 @@ export const statusColorClasses: Record<PMSRoomStatus, string> = {
   booked: "bg-red-500/20 text-red-100 border-red-400/35",
   reserved: "bg-blue-500/20 text-blue-100 border-blue-400/35",
   maintenance: "bg-yellow-400/20 text-yellow-100 border-yellow-300/35",
+  cleaning: "bg-orange-500/20 text-orange-200 border-orange-400/35",
   "out-of-service": "bg-zinc-500/22 text-zinc-100 border-zinc-300/25",
 };
 
@@ -496,63 +498,8 @@ export const lightStatusColorClasses: Record<PMSRoomStatus, string> = {
   booked: "bg-red-500/12 text-red-700 border-red-500/25",
   reserved: "bg-blue-500/12 text-blue-700 border-blue-500/25",
   maintenance: "bg-yellow-400/25 text-yellow-800 border-yellow-500/30",
+  cleaning: "bg-orange-500/12 text-orange-700 border-orange-500/25",
   "out-of-service": "bg-zinc-500/12 text-zinc-700 border-zinc-500/25",
-};
-
-const isWithin = (date: string, start: string, end: string) => date >= start && date <= end;
-
-export const getBlockForRoomDate = (roomNumber: string, date: string, blocks = maintenanceBlocks) =>
-  blocks.find((block) => block.roomNumber === roomNumber && block.status !== "Completed" && isWithin(date, block.startDate, block.endDate));
-
-export const getBookingForRoomDate = (roomNumber: string, date: string, bookings = bookingRecords) =>
-  bookings.find(
-    (booking) =>
-      booking.assignedRoom === roomNumber &&
-      booking.status !== "Cancelled" &&
-      isWithin(date, booking.checkIn, booking.checkOut),
-  );
-
-export const getCalendarStatus = (
-  room: PMSRoom,
-  date: string,
-  bookings = bookingRecords,
-  blocks = maintenanceBlocks,
-): CalendarStatus => {
-  if (room.status === "out-of-service") return "out-of-service";
-  if (getBlockForRoomDate(room.roomNumber, date, blocks) || room.status === "maintenance") return "maintenance";
-  const booking = getBookingForRoomDate(room.roomNumber, date, bookings);
-  if (booking?.status === "Pending") return "reserved";
-  if (booking) return "booked";
-  if (room.status === "reserved") return "reserved";
-  if (room.status === "booked") return "booked";
-  return "available";
-};
-
-export const hasRoomConflict = (
-  roomNumber: string,
-  checkIn: string,
-  checkOut: string,
-  bookings = bookingRecords,
-  blocks = maintenanceBlocks,
-  roomsList = pmsRooms,
-) => {
-  const room = roomsList.find((item) => item.roomNumber === roomNumber);
-  if (!room || room.status === "out-of-service") return true;
-  const booked = bookings.some(
-    (booking) =>
-      booking.assignedRoom === roomNumber &&
-      booking.status !== "Cancelled" &&
-      checkIn <= booking.checkOut &&
-      checkOut >= booking.checkIn,
-  );
-  const blocked = blocks.some(
-    (block) =>
-      block.roomNumber === roomNumber &&
-      block.status !== "Completed" &&
-      checkIn <= block.endDate &&
-      checkOut >= block.startDate,
-  );
-  return booked || blocked;
 };
 
 export const buildKpis = (roomsList = pmsRooms, bookings = bookingRecords, blocks = maintenanceBlocks) => {
