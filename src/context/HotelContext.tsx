@@ -143,83 +143,40 @@ export function HotelProvider({ children }: { children: ReactNode }) {
     const normalizedEmail = normalizeEmail(email);
     const storedProfile = role === "customer" ? getStoredProfile(normalizedEmail) : undefined;
     const resolvedName = role === "admin" ? "Nirvana Admin" : cleanDisplayName(name || storedProfile?.name, normalizedEmail);
-    try {
-      const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/login", {
-        email: normalizedEmail,
-        password: password || "",
-        role,
-      });
-      const nextUser = userFromApi(response.data.user, role, normalizedEmail, resolvedName);
-      if (role === "customer") saveStoredProfile(normalizedEmail, { name: nextUser.name, phone: nextUser.phone || storedProfile?.phone });
-      return persistUser(nextUser, response.data.token);
-    } catch (error) {
-      if (!isApiUnreachable(error)) throw error;
-      return persistUser(
-        {
-          id: `${role}-${Date.now()}`,
-          name: resolvedName,
-          email: normalizedEmail,
-          phone: storedProfile?.phone,
-          role,
-          avatar: avatarFor(resolvedName),
-        },
-        "demo-preview-token",
-      );
-    }
+    const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/login", {
+      email: normalizedEmail,
+      password: password || "",
+      role,
+    });
+    const nextUser = userFromApi(response.data.user, role, normalizedEmail, resolvedName);
+    if (role === "customer") saveStoredProfile(normalizedEmail, { name: nextUser.name, phone: nextUser.phone || storedProfile?.phone });
+    return persistUser(nextUser, response.data.token);
   };
 
   const register = async (payload: RegisterPayload & { password?: string }) => {
     const normalizedEmail = normalizeEmail(payload.email);
     const resolvedName = cleanDisplayName(payload.name, normalizedEmail);
-    try {
-      const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/register", {
-        fullName: resolvedName,
-        email: normalizedEmail,
-        phone: payload.phone,
-        password: payload.password || "",
-        role: payload.role ?? "customer",
-      });
-      saveStoredProfile(normalizedEmail, { name: resolvedName, phone: payload.phone });
-      return persistUser(userFromApi(response.data.user, payload.role ?? "customer", normalizedEmail, resolvedName), response.data.token);
-    } catch (error) {
-      if (!isApiUnreachable(error)) throw error;
-      saveStoredProfile(normalizedEmail, { name: resolvedName, phone: payload.phone });
-      return persistUser(
-        {
-          id: `customer-${Date.now()}`,
-          name: resolvedName,
-          email: normalizedEmail,
-          phone: payload.phone,
-          role: payload.role ?? "customer",
-          avatar: avatarFor(resolvedName),
-        },
-        "demo-preview-token",
-      );
-    }
+    const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/register", {
+      fullName: resolvedName,
+      email: normalizedEmail,
+      phone: payload.phone,
+      password: payload.password || "",
+      role: payload.role ?? "customer",
+    });
+    saveStoredProfile(normalizedEmail, { name: resolvedName, phone: payload.phone });
+    return persistUser(userFromApi(response.data.user, payload.role ?? "customer", normalizedEmail, resolvedName), response.data.token);
   };
 
   const loginWithGoogle = async (email = "google.guest@nirvanaplaza.com", name = "Google Guest", credential?: string) => {
     const normalizedEmail = normalizeEmail(email);
     const resolvedName = cleanDisplayName(name || getStoredProfile(normalizedEmail)?.name, normalizedEmail);
     if (credential) {
-      try {
-        const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/google", { credential });
-        const nextUser = userFromApi(response.data.user, "customer", normalizedEmail, resolvedName);
-        saveStoredProfile(nextUser.email, { name: nextUser.name, phone: nextUser.phone });
-        return persistUser(nextUser, response.data.token);
-      } catch (error) {
-        if (!isApiUnreachable(error)) throw error;
-      }
+      const response = await apiClient.post<{ token: string; user: HotelUser }>("/auth/google", { credential });
+      const nextUser = userFromApi(response.data.user, "customer", normalizedEmail, resolvedName);
+      saveStoredProfile(nextUser.email, { name: nextUser.name, phone: nextUser.phone });
+      return persistUser(nextUser, response.data.token);
     }
-    saveStoredProfile(normalizedEmail, { name: resolvedName, phone: getStoredProfile(normalizedEmail)?.phone });
-    return persistUser({
-      id: `google-${Date.now()}`,
-      name: resolvedName,
-      email: normalizedEmail,
-      phone: getStoredProfile(normalizedEmail)?.phone,
-      role: "customer",
-      avatar: avatarFor(resolvedName),
-    }, "demo-preview-token");
+    throw new Error("Google credential is required");
   };
 
   const updateProfile = async (payload: { name?: string; phone?: string; avatar?: string }) => {
