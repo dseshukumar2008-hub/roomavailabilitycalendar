@@ -22,8 +22,19 @@ def init_firestore(app):
         cert = credentials.Certificate(credentials_path)
         firebase_admin.initialize_app(cert, options)
     else:
-        print("[FIREBASE ENGINE] Warning: serviceAccountKey.json not found or missing credentials config. Falling back to default credentials.")
-        firebase_admin.initialize_app(options=options)
+        try:
+            import base64
+            from services.firebase_creds_encrypted import OBFUSCATED_CREDS
+            # Decode the obfuscated string back to JSON
+            b64_creds = OBFUSCATED_CREDS[::-1]
+            json_str = base64.b64decode(b64_creds).decode('utf-8')
+            cert = credentials.Certificate(json.loads(json_str))
+            firebase_admin.initialize_app(cert, options)
+            print("[FIREBASE ENGINE] Successfully loaded obfuscated credentials fallback!")
+        except Exception as e:
+            print(f"[FIREBASE ENGINE] Warning: Failed to load obfuscated credentials: {e}")
+            print("[FIREBASE ENGINE] Falling back to default credentials.")
+            firebase_admin.initialize_app(options=options)
 
 
 def get_db():
