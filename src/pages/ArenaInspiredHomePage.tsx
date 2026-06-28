@@ -384,8 +384,15 @@ function PublicInfoPanel({ title, items }: { title: string; items: string[] }) {
   return (
     <div className="arena-glass rounded-[2rem] p-5">
       <h2 className="text-xl font-black">{title}</h2>
-      <div className="mt-4 space-y-3">
-        {items.map((item) => <p key={item} className="rounded-2xl bg-[var(--arena-surface-soft)] p-4 text-sm font-semibold leading-6 text-[var(--arena-muted)]">{item}</p>)}
+      <div className="mt-5 space-y-4">
+        {items.map((item, index) => (
+          <div key={item} className="flex gap-3">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--arena-surface-soft)] border border-[var(--arena-border)] text-[11px] font-black text-[var(--arena-text)]">
+              {index + 1}
+            </div>
+            <p className="text-sm font-semibold leading-6 text-[var(--arena-muted)]">{item}</p>
+          </div>
+        ))}
       </div>
     </div>
   );
